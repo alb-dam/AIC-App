@@ -2,4 +2,25 @@
     <string name="app_name">AIC</string>
     <string name="denied">Denied</string>
     <string name="accept">Accept</string>
+
+    <!-- Permissions -->
+    <string name="permissions_denied_title">Permissions denied</string>
+    <string name="permissions_rationale">Explain why you need to grant %1$s permissions to stream</string>
+    <string name="permissions_denied_message">You need to grant all permissions to stream</string>
+
+    <!-- Errors & Toasts -->
+    <string name="error_connection">Connection error: %1$s</string>
+    <string name="error_generic">Error: %1$s</string>
+    <string name="error_stop_stream_resolution">Stop streaming before changing resolution</string>
+    <string name="error_stop_stream_fps">Stop streaming before changing frame rate</string>
+    <string name="energy_saving_message">Screen dimmed to save energy. Tap to wake up.</string>
+    <string name="error_focus">Failed to set focus mode</string>
+
+    <!-- Settings & UI -->
+    <string name="srt_url_title">SRT URL</string>
+    <string name="bitrate_title">Bitrate (bps)</string>
+    <string name="dimensions_label">Dimensioni</string>
+    <string name="focus_label">Focus</string>
+    <string name="focus_auto">AUTO</string>
+    <string name="focus_infinity">∞</string>
 </resources>
