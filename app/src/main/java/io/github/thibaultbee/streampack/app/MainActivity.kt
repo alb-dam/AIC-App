@@ -7,6 +7,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import android.content.Context
 import android.media.AudioManager
 import android.hardware.camera2.CameraManager
 import android.hardware.camera2.CameraCharacteristics
