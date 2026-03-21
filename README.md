@@ -1,23 +1,24 @@
-# StreamPack boilerplate Android application
+# AIC - AI Cameraman App
 
-An example RTMP or SRT live streaming application that demonstrates how to
-use [StreamPack](https://github.com/ThibaultBee/StreamPack). In just 5 minutes, you will be able to
-stream live video to your server.
+An Android live streaming application built on top of [StreamPack](https://github.com/ThibaultBee/StreamPack), designed to provide a smooth, reliable, and energy-efficient streaming experience. The application allows users to broadcast live using the SRT protocol with robust configuration options and automatic reconnect capabilities.
 
-## Features
+## Key Features
 
-- [x] RTMP live streaming
-- [x] SRT live streaming
-- [x] Zoom on pinch
-- [x] Focus on tap
+- **SRT Live Streaming:** High-quality, low-latency streaming.
+- **Auto-Reconnect:** The stream automatically reconnects to the server upon network loss or glitches (e.g. switching from WiFi to 4G).
+- **In-App Configuration:** Change the SRT Server URL and Video Bitrate (in Mbps) directly from the settings panel.
+- **Dynamic Resolution & FPS:** Adjust between HD, FHD, UHD, 8K, and 30/60 FPS.
+- **Energy Saving Mode:** The screen automatically dims to save battery after 30 seconds of inactivity while recording/streaming.
+- **Advanced Camera Controls:** 
+  - Switch between Front and Back cameras.
+  - Manual and Auto Focus modes.
+  - Audio Mute toggle.
+- **Responsive UI:** UI elements gracefully rotate according to device orientation without stopping the stream or recreating the activity.
 
-See [StreamPack](https://github.com/ThibaultBee/StreamPack) for more settings and information.
+## Getting Started
 
-## Getting started
-
-1. Click on "Use this template" to create a new repository from this template.
-2. Clone your new repository.
-3. Open the project with Android Studio.
-4. Replace default `rtmp://my.server.url:1935/app/streamKey` by your RTMP or SRT server URL in
-   `MainViewModel.kt`.
-5. Run the application on a device or an emulator.
+1. Clone or download this repository.
+2. Open the project in Android Studio.
+3. Build and run the application on an Android device (an emulator may not support all camera features).
+4. Tap the Settings icon to configure your **SRT URL** and **Bitrate**.
+5. Tap the **Live** button (the big round button) to start broadcasting.
