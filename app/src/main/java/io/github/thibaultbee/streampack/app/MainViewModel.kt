@@ -13,7 +13,6 @@ import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.asLiveData
 import androidx.lifecycle.viewModelScope
-import io.github.thibaultbee.streampack.app.data.SettingsRepository
 import io.github.thibaultbee.streampack.app.data.rotation.RotationRepository
 import io.github.thibaultbee.streampack.core.elements.sources.audio.audiorecord.MicrophoneSourceFactory
 import io.github.thibaultbee.streampack.core.elements.sources.video.camera.ICameraSource
@@ -33,7 +32,6 @@ import kotlinx.coroutines.launch
 
 class MainViewModel(
     private val rotationRepository: RotationRepository,
-    val settingsRepository: SettingsRepository,
     val streamer: SingleStreamer
 ) : ViewModel() {
 
@@ -103,7 +101,7 @@ class MainViewModel(
     suspend fun startStream() {
         _isTryingConnectionLiveData.postValue(true)
         try {
-            streamer.startStream(settingsRepository.srtUrl)
+            streamer.startStream(ApplicationConstants.SRT_URL)
         } finally {
             _isTryingConnectionLiveData.postValue(false)
         }
@@ -123,7 +121,7 @@ class MainViewModel(
             while (isActive) {
                 _isTryingConnectionLiveData.postValue(true)
                 try {
-                    streamer.startStream(settingsRepository.srtUrl)
+                    streamer.startStream(ApplicationConstants.SRT_URL)
                     // Connected successfully
                     _isRetryingLiveData.postValue(false)
                     _isTryingConnectionLiveData.postValue(false)
@@ -176,7 +174,7 @@ class MainViewModel(
         streamer.setVideoConfig(
             VideoConfig(
                 mimeType = MediaFormat.MIMETYPE_VIDEO_HEVC,
-                startBitrate = settingsRepository.videoBitrate,
+                startBitrate = ApplicationConstants.VIDEO_BITRATE,
                 resolution = resolution,
                 fps = fps,
                 gopDurationInS = ApplicationConstants.VIDEO_GOP_DURATION

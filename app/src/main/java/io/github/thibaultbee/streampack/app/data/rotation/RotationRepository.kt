@@ -17,6 +17,7 @@ class RotationRepository(
      * device is rotated.
      * If the application orientation is locked, you should use `DisplayRotationProvider` instead.
      */
+    //private val rotationProvider = DisplayRotationProvider(context).asFlowProvider()
     private val rotationProvider = SensorRotationProvider(context).asFlowProvider()
     val rotationFlow: Flow<Int> = rotationProvider.rotationFlow
 

@@ -108,7 +108,7 @@
             android:id="@+id/dimLabel"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="@string/dimensions_label"
+            android:text="Dimensioni"
             android:textColor="@color/white"
             android:textSize="14sp"
             app:layout_constraintStart_toStartOf="parent"
@@ -159,56 +159,7 @@
             <TextView android:id="@+id/fps30" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="30" android:textColor="@color/white" android:textSize="14sp" android:textStyle="bold" android:padding="8dp" android:clickable="true" android:focusable="true"/>
         </LinearLayout>
 
-        <TextView
-            android:id="@+id/srtLabel"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="@string/srt_url_title"
-            android:textColor="@color/white"
-            android:textSize="14sp"
-            android:layout_marginTop="24dp"
-            app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintTop_toBottomOf="@id/fpsGroup" />
 
-        <EditText
-            android:id="@+id/srtUrlInput"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="24dp"
-            android:textColor="@color/white"
-            android:textColorHint="#999999"
-            android:textSize="14sp"
-            android:maxLines="1"
-            android:inputType="textUri"
-            app:layout_constraintStart_toEndOf="@id/srtLabel"
-            app:layout_constraintEnd_toEndOf="parent"
-            app:layout_constraintTop_toTopOf="@id/srtLabel"
-            app:layout_constraintBottom_toBottomOf="@id/srtLabel" />
-
-        <TextView
-            android:id="@+id/bitrateLabel"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="@string/bitrate_title"
-            android:textColor="@color/white"
-            android:textSize="14sp"
-            android:layout_marginTop="24dp"
-            app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintTop_toBottomOf="@id/srtUrlInput" />
-
-        <EditText
-            android:id="@+id/bitrateInput"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="24dp"
-            android:textColor="@color/white"
-            android:textColorHint="#999999"
-            android:textSize="14sp"
-            android:inputType="number"
-            app:layout_constraintStart_toEndOf="@id/bitrateLabel"
-            app:layout_constraintEnd_toEndOf="parent"
-            app:layout_constraintTop_toTopOf="@id/bitrateLabel"
-            app:layout_constraintBottom_toBottomOf="@id/bitrateLabel" />
 
     </androidx.constraintlayout.widget.ConstraintLayout>
 
@@ -231,7 +182,7 @@
             android:id="@+id/focusLabel"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="@string/focus_label"
+            android:text="Focus"
             android:textColor="@color/white"
             android:textSize="14sp"
             app:layout_constraintStart_toStartOf="parent"
@@ -241,7 +192,7 @@
             android:id="@+id/focusModeLabel"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="@string/focus_auto"
+            android:text="AUTO"
             android:textColor="@color/accent"
             android:textSize="14sp"
             android:textStyle="bold"
@@ -255,7 +206,7 @@
             android:id="@+id/focusNearLabel"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="@string/focus_auto"
+            android:text="AUTO"
             android:textColor="@color/white"
             android:textSize="11sp"
             android:layout_marginTop="16dp"
@@ -279,7 +230,7 @@
             android:id="@+id/focusFarLabel"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="@string/focus_infinity"
+            android:text="∞"
             android:textColor="@color/white"
             android:textSize="11sp"
             android:layout_marginTop="4dp"
@@ -311,32 +262,6 @@
             app:layout_constraintEnd_toEndOf="parent"
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintTop_toTopOf="parent" />
-
-        <ToggleButton
-            android:id="@+id/micButton"
-            android:layout_width="48dp"
-            android:layout_height="48dp"
-            android:layout_marginStart="32dp"
-            android:textOn="MIC"
-            android:textOff="MUTE"
-            android:textSize="10sp"
-            android:background="?attr/selectableItemBackgroundBorderless"
-            android:textColor="@color/white"
-            app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintTop_toTopOf="@+id/liveButton"
-            app:layout_constraintBottom_toBottomOf="@+id/liveButton" />
-
-        <ImageButton
-            android:id="@+id/switchCameraButton"
-            android:layout_width="48dp"
-            android:layout_height="48dp"
-            android:layout_marginStart="8dp"
-            android:src="@android:drawable/ic_menu_camera"
-            app:tint="@color/white"
-            android:background="?attr/selectableItemBackgroundBorderless"
-            app:layout_constraintStart_toEndOf="@+id/micButton"
-            app:layout_constraintTop_toTopOf="@+id/liveButton"
-            app:layout_constraintBottom_toBottomOf="@+id/liveButton" />
 
         <!-- Energy Saving Toggle Button -->
         <ImageButton

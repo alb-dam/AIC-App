@@ -7,9 +7,6 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
-import android.media.AudioManager
-import android.hardware.camera2.CameraManager
-import android.hardware.camera2.CameraCharacteristics
 import androidx.activity.viewModels
 import androidx.annotation.RequiresPermission
 import androidx.appcompat.app.AppCompatActivity
@@ -39,7 +36,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
     private var originalBrightness: Float = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
     private var wasRecActive = false
-    private var isFrontCamera = false
 
     private val viewModel: MainViewModel by viewModels {
         MainViewModelFactory(this.application)
@@ -58,8 +54,8 @@ class MainActivity : AppCompatActivity() {
         onAllGranted = { onPermissionsGranted() },
         onShowPermissionRationale = { permissions, onRequiredPermissionLastTime ->
             showDialog(
-                title = getString(R.string.permissions_denied_title),
-                message = getString(R.string.permissions_rationale, permissions),
+                title = "Permissions denied",
+                message = "Explain why you need to grant $permissions permissions to stream",
                 positiveButtonText = R.string.accept,
                 onPositiveButtonClick = { onRequiredPermissionLastTime() },
                 negativeButtonText = R.string.denied
@@ -67,8 +63,8 @@ class MainActivity : AppCompatActivity() {
         },
         onDenied = {
             showDialog(
-                getString(R.string.permissions_denied_title),
-                getString(R.string.permissions_denied_message),
+                "Permissions denied",
+                "You need to grant all permissions to stream",
                 positiveButtonText = 0,
                 negativeButtonText = 0
             )
@@ -80,12 +76,6 @@ class MainActivity : AppCompatActivity() {
 
     // ── UI Rotation ──
 
-    private object RotationConstants {
-        val RANGE_270 = 45..134
-        val RANGE_180 = 135..224
-        val RANGE_90 = 225..314
-    }
-
     private var currentUiRotation = 0f
 
     private val orientationEventListener by lazy {
@@ -94,9 +84,9 @@ class MainActivity : AppCompatActivity() {
                 if (orientation == ORIENTATION_UNKNOWN) return
 
                 val baseTarget = when (orientation) {
-                    in RotationConstants.RANGE_270  -> 270f
-                    in RotationConstants.RANGE_180 -> 180f
-                    in RotationConstants.RANGE_90 -> 90f
+                    in 45..134  -> 270f
+                    in 135..224 -> 180f
+                    in 225..314 -> 90f
                     else        -> 0f
                 }
 
@@ -200,11 +190,11 @@ class MainActivity : AppCompatActivity() {
 
         // Error observers
         viewModel.closedThrowableLiveData.observe(this) {
-            toast(getString(R.string.error_connection, it.message))
+            toast("Connection error: ${it.message}")
             viewModel.onStreamDisconnected()
         }
         viewModel.throwableLiveData.observe(this) {
-            toast(getString(R.string.error_generic, it.message))
+            toast("Error: ${it.message}")
         }
 
         // Streaming / retry state → unified UI updates
@@ -216,10 +206,8 @@ class MainActivity : AppCompatActivity() {
         binding.settingsTopButton.setOnClickListener {
             if (binding.settingsPanel.visibility == View.VISIBLE) {
                 binding.settingsPanel.visibility = View.GONE
-                saveSettings()
             } else {
                 binding.focusPanel.visibility = View.GONE
-                loadSettings()
                 binding.settingsPanel.visibility = View.VISIBLE
             }
         }
@@ -237,58 +225,6 @@ class MainActivity : AppCompatActivity() {
         setupFocusControls()
         setupResolutionAndFpsControls()
         setupEnergySaving()
-        setupCameraSwitch()
-        setupMute()
-    }
-
-    private fun loadSettings() {
-        binding.srtUrlInput.setText(viewModel.settingsRepository.srtUrl)
-        binding.bitrateInput.setText(viewModel.settingsRepository.videoBitrate.toString())
-    }
-
-    private fun saveSettings() {
-        val url = binding.srtUrlInput.text.toString()
-        if (url.isNotBlank()) viewModel.settingsRepository.srtUrl = url
-
-        val bitrate = binding.bitrateInput.text.toString().toIntOrNull()
-        if (bitrate != null && bitrate > 0) viewModel.settingsRepository.videoBitrate = bitrate
-    }
-
-    private fun setupCameraSwitch() {
-        binding.switchCameraButton.setOnClickListener {
-            isFrontCamera = !isFrontCamera
-            lifecycleScope.launch {
-                try {
-                    val cameraManager = getSystemService(Context.CAMERA_SERVICE) as CameraManager
-                    val targetFacing = if (isFrontCamera) CameraCharacteristics.LENS_FACING_FRONT else CameraCharacteristics.LENS_FACING_BACK
-                    
-                    var targetCameraId: String? = null
-                    for (id in cameraManager.cameraIdList) {
-                        val chars = cameraManager.getCameraCharacteristics(id)
-                        if (chars.get(CameraCharacteristics.LENS_FACING) == targetFacing) {
-                            targetCameraId = id
-                            break
-                        }
-                    }
-                    
-                    if (targetCameraId == null) {
-                        targetCameraId = this@MainActivity.defaultCameraId
-                        isFrontCamera = false
-                    }
-                    
-                    viewModel.setCameraId(targetCameraId)
-                } catch (e: Exception) {
-                    Log.e(TAG, "Error switching camera", e)
-                }
-            }
-        }
-    }
-
-    private fun setupMute() {
-        binding.micButton.setOnCheckedChangeListener { _, isChecked ->
-            val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
-            audioManager.isMicrophoneMute = isChecked
-        }
     }
 
     // ──────────────────────────────────────────────
@@ -360,23 +296,21 @@ class MainActivity : AppCompatActivity() {
             override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
                 if (!fromUser) return
                 if (progress == 0) {
-                    binding.focusModeLabel.text = getString(R.string.focus_auto)
+                    binding.focusModeLabel.text = "AUTO"
                     lifecycleScope.launch {
                         try {
                             viewModel.setAutoFocus()
                         } catch (e: Exception) {
                             Log.w(TAG, "Failed to set auto focus", e)
-                            toast(getString(R.string.error_focus))
                         }
                     }
                 } else {
-                    binding.focusModeLabel.text = if (progress == 100) getString(R.string.focus_infinity) else "$progress%"
+                    binding.focusModeLabel.text = if (progress == 100) "∞" else "$progress%"
                     lifecycleScope.launch {
                         try {
                             viewModel.setManualFocus(progress / 100f)
                         } catch (e: Exception) {
                             Log.w(TAG, "Failed to set manual focus", e)
-                            toast(getString(R.string.error_focus))
                         }
                     }
                 }
@@ -431,7 +365,7 @@ class MainActivity : AppCompatActivity() {
         resolutionButtons.forEach { (button, option) ->
             button.setOnClickListener {
                 if (viewModel.isStreamingLiveData.value == true) {
-                    toast(getString(R.string.error_stop_stream_resolution))
+                    toast("Stop streaming before changing resolution")
                 } else {
                     viewModel.setResolution(option.size)
                     configureStreamer()
@@ -443,7 +377,7 @@ class MainActivity : AppCompatActivity() {
         fpsButtons.forEach { (button, value) ->
             button.setOnClickListener {
                 if (viewModel.isStreamingLiveData.value == true) {
-                    toast(getString(R.string.error_stop_stream_fps))
+                    toast("Stop streaming before changing frame rate")
                 } else {
                     viewModel.setFps(value)
                     configureStreamer()
@@ -482,7 +416,7 @@ class MainActivity : AppCompatActivity() {
         binding.energySavingOverlay.visibility = View.VISIBLE
         stopInactivityTimer()
 
-        toast(getString(R.string.energy_saving_message))
+        toast("Screen dimmed to save energy. Tap to wake up.")
     }
 
     private fun disablePowerSavingMode() {
