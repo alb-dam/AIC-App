@@ -124,7 +124,7 @@ class MainActivity : AppCompatActivity() {
 
     // ── Auto Energy Saving ──
 
-    private val inactivityTimeoutMs = 5000L
+    private val inactivityTimeoutMs = 30000L
     private val inactivityHandler = Handler(Looper.getMainLooper())
     private val energySavingRunnable = Runnable {
         if (isRecActive() && binding.energySavingOverlay.visibility == View.GONE) {
@@ -206,6 +206,7 @@ class MainActivity : AppCompatActivity() {
         }
         viewModel.throwableLiveData.observe(this) {
             toast(getString(R.string.error_generic, it.message))
+            viewModel.onStreamDisconnected()
         }
 
         // Streaming / retry state → unified UI updates
@@ -244,15 +245,19 @@ class MainActivity : AppCompatActivity() {
 
     private fun loadSettings() {
         binding.srtUrlInput.setText(viewModel.settingsRepository.srtUrl)
-        binding.bitrateInput.setText(viewModel.settingsRepository.videoBitrate.toString())
+        val mbps = viewModel.settingsRepository.videoBitrate / 1_000_000f
+        val mbpsStr = if (mbps == mbps.toInt().toFloat()) mbps.toInt().toString() else mbps.toString()
+        binding.bitrateInput.setText(mbpsStr)
     }
 
     private fun saveSettings() {
         val url = binding.srtUrlInput.text.toString()
         if (url.isNotBlank()) viewModel.settingsRepository.srtUrl = url
 
-        val bitrate = binding.bitrateInput.text.toString().toIntOrNull()
-        if (bitrate != null && bitrate > 0) viewModel.settingsRepository.videoBitrate = bitrate
+        val mbps = binding.bitrateInput.text.toString().toFloatOrNull()
+        if (mbps != null && mbps > 0) {
+            viewModel.settingsRepository.videoBitrate = (mbps * 1_000_000).toInt()
+        }
     }
 
     private fun setupCameraSwitch() {

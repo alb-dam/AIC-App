@@ -204,7 +204,7 @@
             android:textColor="@color/white"
             android:textColorHint="#999999"
             android:textSize="14sp"
-            android:inputType="number"
+            android:inputType="numberDecimal"
             app:layout_constraintStart_toEndOf="@id/bitrateLabel"
             app:layout_constraintEnd_toEndOf="parent"
             app:layout_constraintTop_toTopOf="@id/bitrateLabel"
