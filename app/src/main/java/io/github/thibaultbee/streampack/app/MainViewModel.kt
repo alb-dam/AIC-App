@@ -31,10 +31,13 @@ import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
+import kotlinx.coroutines.flow.merge
+
 class MainViewModel(
     private val rotationRepository: RotationRepository,
     val settingsRepository: SettingsRepository,
-    val streamer: SingleStreamer
+    val streamer: SingleStreamer,
+    val audioStreamer: SingleStreamer
 ) : ViewModel() {
 
     companion object {
@@ -47,6 +50,7 @@ class MainViewModel(
     // ──────────────────────────────────────────────
 
     /** Streaming state (active / stopped). */
+    /** Streaming state (active / stopped) - combining both. */
     val isStreamingLiveData: LiveData<Boolean>
         get() = streamer.isStreamingFlow.asLiveData()
 
@@ -63,14 +67,14 @@ class MainViewModel(
 
     /** Async disconnection errors. */
     val closedThrowableLiveData: LiveData<Throwable> =
-        streamer.throwableFlow
+        merge(streamer.throwableFlow, audioStreamer.throwableFlow)
             .filterNotNull()
             .filter { it.isClosedException }
             .asLiveData()
 
     /** Generic streamer errors. */
     val throwableLiveData: LiveData<Throwable> =
-        streamer.throwableFlow
+        merge(streamer.throwableFlow, audioStreamer.throwableFlow)
             .filterNotNull()
             .filter { !it.isClosedException }
             .asLiveData()
@@ -104,13 +108,20 @@ class MainViewModel(
         _isTryingConnectionLiveData.postValue(true)
         try {
             streamer.startStream(settingsRepository.srtUrl)
+            try {
+                audioStreamer.startStream(settingsRepository.audioSrtUrl)
+            } catch (e: Exception) {
+                streamer.stopStream()
+                throw e
+            }
         } finally {
             _isTryingConnectionLiveData.postValue(false)
         }
     }
 
     suspend fun stopStream() {
-        streamer.stopStream()
+        try { streamer.stopStream() } catch (e: Exception) { Log.e(TAG, "Error stopping main stream", e) }
+        try { audioStreamer.stopStream() } catch (e: Exception) { Log.e(TAG, "Error stopping audio stream", e) }
     }
 
     /**
@@ -124,6 +135,12 @@ class MainViewModel(
                 _isTryingConnectionLiveData.postValue(true)
                 try {
                     streamer.startStream(settingsRepository.srtUrl)
+                    try {
+                        audioStreamer.startStream(settingsRepository.audioSrtUrl)
+                    } catch (e: Exception) {
+                        streamer.stopStream()
+                        throw e
+                    }
                     // Connected successfully
                     _isRetryingLiveData.postValue(false)
                     _isTryingConnectionLiveData.postValue(false)
@@ -160,13 +177,13 @@ class MainViewModel(
 
     @RequiresPermission(Manifest.permission.RECORD_AUDIO)
     suspend fun setAudioConfig() {
-        streamer.setAudioConfig(
-            AudioConfig(
-                mimeType = MediaFormat.MIMETYPE_AUDIO_AAC,
-                sampleRate = ApplicationConstants.AUDIO_SAMPLE_RATE,
-                channelConfig = AudioFormat.CHANNEL_IN_STEREO
-            )
+        val config = AudioConfig(
+            mimeType = MediaFormat.MIMETYPE_AUDIO_AAC,
+            sampleRate = ApplicationConstants.AUDIO_SAMPLE_RATE,
+            channelConfig = AudioFormat.CHANNEL_IN_STEREO
         )
+        streamer.setAudioConfig(config)
+        audioStreamer.setAudioConfig(config)
     }
 
     suspend fun setVideoConfig() {
@@ -195,6 +212,7 @@ class MainViewModel(
 
     suspend fun setAudioSource() {
         streamer.setAudioSource(MicrophoneSourceFactory())
+        audioStreamer.setAudioSource(MicrophoneSourceFactory())
     }
 
     @RequiresPermission(Manifest.permission.CAMERA)

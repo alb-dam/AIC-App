@@ -20,6 +20,14 @@ object ApplicationConstants {
         "&rcvbuf=16777216&sndbuf=16777216" +
         "&pkt_size=1316" +
         "&tlpktdrop=0" 
+    
+    // ── Audio SRT ──
+    const val DEFAULT_AUDIO_SRT_URL = "srt://100.117.124.124:9998" +
+        "?mode=caller&transtype=live" +
+        "&latency=3000&peerlatency=3000" +
+        "&rcvbuf=16777216&sndbuf=16777216" +
+        "&pkt_size=1316" +
+        "&tlpktdrop=0" 
     //  "&streamid=f8cbf735-685d-47fe-9118-c1ae692c3f2f.stream,mode:publish"
     // ── Video ──
     const val DEFAULT_VIDEO_BITRATE      = 2_000_000   // 3 Mbps CBR

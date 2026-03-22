@@ -41,6 +41,7 @@ class MainActivity : AppCompatActivity() {
     private var originalBrightness: Float = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
     private var wasRecActive = false
     private var isFrontCamera = false
+    private val liveButtonCooldownMs = 5000L
 
     private val viewModel: MainViewModel by viewModels {
         MainViewModelFactory(this.application)
@@ -77,6 +78,10 @@ class MainActivity : AppCompatActivity() {
 
     private val streamerLifeCycleObserver by lazy {
         StreamerActivityLifeCycleObserver(viewModel.streamer)
+    }
+
+    private val audioStreamerLifeCycleObserver by lazy {
+        StreamerActivityLifeCycleObserver(viewModel.audioStreamer)
     }
 
     // ── UI Rotation ──
@@ -171,6 +176,7 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         lifecycle.removeObserver(streamerLifeCycleObserver)
+        lifecycle.removeObserver(audioStreamerLifeCycleObserver)
     }
 
     override fun onUserInteraction() {
@@ -193,10 +199,18 @@ class MainActivity : AppCompatActivity() {
                 } else {
                     viewModel.stopStreamAndRetry()
                 }
+                // Cooldown: disable button for 4 seconds to let SRT listener reopen
+                view.isEnabled = false
+                view.alpha = 0.5f
+                Handler(Looper.getMainLooper()).postDelayed({
+                    view.isEnabled = true
+                    view.alpha = 1.0f
+                }, liveButtonCooldownMs)
             }
         }
 
         lifecycle.addObserver(streamerLifeCycleObserver)
+        lifecycle.addObserver(audioStreamerLifeCycleObserver)
         configureStreamer()
 
         // Error observers
@@ -245,6 +259,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun loadSettings() {
         binding.srtUrlInput.setText(viewModel.settingsRepository.srtUrl)
+        binding.audioSrtUrlInput.setText(viewModel.settingsRepository.audioSrtUrl)
         val mbps = viewModel.settingsRepository.videoBitrate / 1_000_000f
         val mbpsStr = if (mbps == mbps.toInt().toFloat()) mbps.toInt().toString() else mbps.toString()
         binding.bitrateInput.setText(mbpsStr)
@@ -253,6 +268,9 @@ class MainActivity : AppCompatActivity() {
     private fun saveSettings() {
         val url = binding.srtUrlInput.text.toString()
         if (url.isNotBlank()) viewModel.settingsRepository.srtUrl = url
+
+        val audioUrl = binding.audioSrtUrlInput.text.toString()
+        if (audioUrl.isNotBlank()) viewModel.settingsRepository.audioSrtUrl = audioUrl
 
         val mbps = binding.bitrateInput.text.toString().toFloatOrNull()
         if (mbps != null && mbps > 0) {

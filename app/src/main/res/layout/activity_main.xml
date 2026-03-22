@@ -186,6 +186,32 @@
             app:layout_constraintBottom_toBottomOf="@id/srtLabel" />
 
         <TextView
+            android:id="@+id/audioSrtLabel"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Audio SRT"
+            android:textColor="@color/white"
+            android:textSize="14sp"
+            android:layout_marginTop="24dp"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toBottomOf="@id/srtUrlInput" />
+
+        <EditText
+            android:id="@+id/audioSrtUrlInput"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="24dp"
+            android:textColor="@color/white"
+            android:textColorHint="#999999"
+            android:textSize="14sp"
+            android:maxLines="1"
+            android:inputType="textUri"
+            app:layout_constraintStart_toEndOf="@id/audioSrtLabel"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintTop_toTopOf="@id/audioSrtLabel"
+            app:layout_constraintBottom_toBottomOf="@id/audioSrtLabel" />
+
+        <TextView
             android:id="@+id/bitrateLabel"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
@@ -194,7 +220,7 @@
             android:textSize="14sp"
             android:layout_marginTop="24dp"
             app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintTop_toBottomOf="@id/srtUrlInput" />
+            app:layout_constraintTop_toBottomOf="@id/audioSrtUrlInput" />
 
         <EditText
             android:id="@+id/bitrateInput"

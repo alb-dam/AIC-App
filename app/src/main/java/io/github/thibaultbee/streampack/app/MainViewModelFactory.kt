@@ -18,16 +18,17 @@ class MainViewModelFactory(private val application: Application) :
     @Suppress("UNCHECKED_CAST")
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         if (modelClass.isAssignableFrom(MainViewModel::class.java)) {
-            val streamer = createStreamer(application)
-            return MainViewModel(rotationRepository, settingsRepository, streamer) as T
+            val streamer = createStreamer(application, withVideo = true)
+            val audioStreamer = createStreamer(application, withVideo = false)
+            return MainViewModel(rotationRepository, settingsRepository, streamer, audioStreamer) as T
         }
         throw IllegalArgumentException("Unknown ViewModel class")
     }
 
     companion object {
-        private fun createStreamer(application: Application): SingleStreamer {
+        private fun createStreamer(application: Application, withVideo: Boolean): SingleStreamer {
             return SingleStreamer(
-                application, withAudio = true, withVideo = true
+                application, withAudio = true, withVideo = withVideo
             )
         }
     }
