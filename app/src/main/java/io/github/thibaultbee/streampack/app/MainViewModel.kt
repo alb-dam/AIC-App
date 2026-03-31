@@ -26,11 +26,15 @@ import io.github.thibaultbee.streampack.core.streamers.single.VideoConfig
 import io.github.thibaultbee.streampack.core.utils.extensions.isClosedException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 import kotlinx.coroutines.flow.merge
 
@@ -52,19 +56,36 @@ class MainViewModel(
 
     /** Streaming state (active / stopped). */
     /** Streaming state (active / stopped) - combining both. */
-    val isStreamingLiveData: LiveData<Boolean>
-        get() = streamer.isStreamingFlow.asLiveData()
+    private val _isStreamingLiveData = MutableLiveData(false)
+    val isStreamingLiveData: LiveData<Boolean> = _isStreamingLiveData
+
+    private var isVideoStreaming = false
+    private var isAudioStreaming = false
 
     /** Connection attempt in progress. */
-    private val _isTryingConnectionLiveData = MutableLiveData<Boolean>()
+    private val _isTryingConnectionLiveData = MutableLiveData(false)
     val isTryingConnectionLiveData: LiveData<Boolean> = _isTryingConnectionLiveData
 
     /** Retry in progress (waiting between attempts). */
     private val _isRetryingLiveData = MutableLiveData(false)
     val isRetryingLiveData: LiveData<Boolean> = _isRetryingLiveData
 
-    /** Active retry coroutine. */
-    private var retryJob: Job? = null
+    private var isVideoTrying = false
+    private var isAudioTrying = false
+    private var isVideoRetrying = false
+    private var isAudioRetrying = false
+
+    private fun updateTryingState() {
+        _isTryingConnectionLiveData.postValue(isVideoTrying || isAudioTrying)
+    }
+
+    private fun updateRetryingState() {
+        _isRetryingLiveData.postValue(isVideoRetrying || isAudioRetrying)
+    }
+
+    /** Active retry coroutines. */
+    private var videoRetryJob: Job? = null
+    private var audioRetryJob: Job? = null
 
     /** Async disconnection errors. */
     val closedThrowableLiveData: LiveData<Throwable> =
@@ -94,6 +115,18 @@ class MainViewModel(
     // ──────────────────────────────────────────────
 
     init {
+        viewModelScope.launch {
+            streamer.isStreamingFlow.collect {
+                isVideoStreaming = it
+                _isStreamingLiveData.postValue(isVideoStreaming || isAudioStreaming)
+            }
+        }
+        viewModelScope.launch {
+            audioStreamer.isStreamingFlow.collect {
+                isAudioStreaming = it
+                _isStreamingLiveData.postValue(isVideoStreaming || isAudioStreaming)
+            }
+        }
         viewModelScope.launch(Dispatchers.Default) {
             rotationRepository.rotationFlow.collect { rotation ->
                 streamer.setTargetRotation(rotation)
@@ -105,19 +138,26 @@ class MainViewModel(
     //  Streaming
     // ──────────────────────────────────────────────
 
-    suspend fun startStream() {
-        _isTryingConnectionLiveData.postValue(true)
-        try {
-            streamer.startStream(settingsRepository.srtUrl)
-            try {
-                audioStreamer.startStream(settingsRepository.audioSrtUrl)
-            } catch (e: Exception) {
-                streamer.stopStream()
-                throw e
-            }
-        } finally {
-            _isTryingConnectionLiveData.postValue(false)
+    suspend fun startStream() = coroutineScope {
+        isVideoTrying = true
+        isAudioTrying = true
+        updateTryingState()
+        
+        val videoJob = launch {
+            try { streamer.startStream(settingsRepository.srtUrl) }
+            catch (e: Exception) { Log.e(TAG, "Video start failed", e) }
         }
+        val audioJob = launch {
+            try { audioStreamer.startStream(settingsRepository.audioSrtUrl) }
+            catch (e: Exception) { Log.e(TAG, "Audio start failed", e) }
+        }
+        
+        videoJob.join()
+        audioJob.join()
+        
+        isVideoTrying = false
+        isAudioTrying = false
+        updateTryingState()
     }
 
     suspend fun stopStream() {
@@ -126,30 +166,78 @@ class MainViewModel(
     }
 
     /**
-     * Starts a retry loop that keeps attempting to connect
+     * Starts retry loops that keep attempting to connect
      * every [RETRY_DELAY_MS] until successful or cancelled.
      */
     fun startStreamWithRetry() {
-        retryJob?.cancel()
-        retryJob = viewModelScope.launch {
+        startVideoStreamWithRetry()
+        startAudioStreamWithRetry()
+    }
+
+    private fun startVideoStreamWithRetry() {
+        videoRetryJob?.cancel()
+        videoRetryJob = viewModelScope.launch {
             while (isActive) {
-                _isTryingConnectionLiveData.postValue(true)
+                // Return if already streaming successfully
+                if (isVideoStreaming) {
+                    isVideoRetrying = false
+                    isVideoTrying = false
+                    updateTryingState()
+                    updateRetryingState()
+                    break
+                }
+
+                isVideoTrying = true
+                updateTryingState()
                 try {
                     streamer.startStream(settingsRepository.srtUrl)
-                    try {
-                        audioStreamer.startStream(settingsRepository.audioSrtUrl)
-                    } catch (e: Exception) {
-                        streamer.stopStream()
-                        throw e
-                    }
                     // Connected successfully
-                    _isRetryingLiveData.postValue(false)
-                    _isTryingConnectionLiveData.postValue(false)
+                    isVideoRetrying = false
+                    isVideoTrying = false
+                    updateTryingState()
+                    updateRetryingState()
                     break
                 } catch (e: Exception) {
-                    Log.w(TAG, "Connection failed, retrying in ${RETRY_DELAY_MS}ms…", e)
-                    _isTryingConnectionLiveData.postValue(false)
-                    _isRetryingLiveData.postValue(true)
+                    Log.w(TAG, "Video connection failed, retrying in ${RETRY_DELAY_MS}ms…", e)
+                    isVideoTrying = false
+                    isVideoRetrying = true
+                    updateTryingState()
+                    updateRetryingState()
+                    delay(RETRY_DELAY_MS)
+                }
+            }
+        }
+    }
+
+    private fun startAudioStreamWithRetry() {
+        audioRetryJob?.cancel()
+        audioRetryJob = viewModelScope.launch {
+            while (isActive) {
+                // Return if already streaming successfully
+                if (isAudioStreaming) {
+                    isAudioRetrying = false
+                    isAudioTrying = false
+                    updateTryingState()
+                    updateRetryingState()
+                    break
+                }
+
+                isAudioTrying = true
+                updateTryingState()
+                try {
+                    audioStreamer.startStream(settingsRepository.audioSrtUrl)
+                    // Connected successfully
+                    isAudioRetrying = false
+                    isAudioTrying = false
+                    updateTryingState()
+                    updateRetryingState()
+                    break
+                } catch (e: Exception) {
+                    Log.w(TAG, "Audio connection failed, retrying in ${RETRY_DELAY_MS}ms…", e)
+                    isAudioTrying = false
+                    isAudioRetrying = true
+                    updateTryingState()
+                    updateRetryingState()
                     delay(RETRY_DELAY_MS)
                 }
             }
@@ -158,9 +246,19 @@ class MainViewModel(
 
     /** Stops streaming and cancels any pending retry. */
     fun stopStreamAndRetry() {
-        retryJob?.cancel()
-        retryJob = null
-        _isRetryingLiveData.postValue(false)
+        videoRetryJob?.cancel()
+        audioRetryJob?.cancel()
+        videoRetryJob = null
+        audioRetryJob = null
+        
+        isVideoRetrying = false
+        isAudioRetrying = false
+        updateRetryingState()
+        
+        isVideoTrying = false
+        isAudioTrying = false
+        updateTryingState()
+
         viewModelScope.launch {
             stopStream()
         }
@@ -168,7 +266,6 @@ class MainViewModel(
 
     /** Called when the stream disconnects mid-session; re-enters the retry loop. */
     fun onStreamDisconnected() {
-        if (retryJob?.isActive == true) return
         startStreamWithRetry()
     }
 
