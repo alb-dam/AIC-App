@@ -17,7 +17,9 @@
     <string name="error_focus">Failed to set focus mode</string>
 
     <!-- Settings & UI -->
-    <string name="srt_url_title">SRT URL</string>
+    <string name="ip_domain_title">IP / Dominio</string>
+    <string name="video_srt_port_title">Porta Video SRT</string>
+    <string name="audio_srt_port_title">Porta Audio SRT</string>
     <string name="bitrate_title">Bitrate (Mbps)</string>
     <string name="dimensions_label">Dimensioni</string>
     <string name="focus_label">Focus</string>

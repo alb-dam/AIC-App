@@ -258,19 +258,23 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun loadSettings() {
-        binding.srtUrlInput.setText(viewModel.settingsRepository.srtUrl)
-        binding.audioSrtUrlInput.setText(viewModel.settingsRepository.audioSrtUrl)
+        binding.ipInput.setText(viewModel.settingsRepository.srtIp)
+        binding.srtPortInput.setText(viewModel.settingsRepository.srtPort.toString())
+        binding.audioSrtPortInput.setText(viewModel.settingsRepository.audioSrtPort.toString())
         val mbps = viewModel.settingsRepository.videoBitrate / 1_000_000f
         val mbpsStr = if (mbps == mbps.toInt().toFloat()) mbps.toInt().toString() else mbps.toString()
         binding.bitrateInput.setText(mbpsStr)
     }
 
     private fun saveSettings() {
-        val url = binding.srtUrlInput.text.toString()
-        if (url.isNotBlank()) viewModel.settingsRepository.srtUrl = url
+        val ip = binding.ipInput.text.toString()
+        if (ip.isNotBlank()) viewModel.settingsRepository.srtIp = ip
 
-        val audioUrl = binding.audioSrtUrlInput.text.toString()
-        if (audioUrl.isNotBlank()) viewModel.settingsRepository.audioSrtUrl = audioUrl
+        val srtPort = binding.srtPortInput.text.toString().toIntOrNull()
+        if (srtPort != null) viewModel.settingsRepository.srtPort = srtPort
+
+        val audioSrtPort = binding.audioSrtPortInput.text.toString().toIntOrNull()
+        if (audioSrtPort != null) viewModel.settingsRepository.audioSrtPort = audioSrtPort
 
         val mbps = binding.bitrateInput.text.toString().toFloatOrNull()
         if (mbps != null && mbps > 0) {
