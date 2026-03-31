@@ -8,6 +8,7 @@ import android.media.MediaFormat
 import android.util.Log
 import android.util.Size
 import androidx.annotation.RequiresPermission
+import android.media.MediaCodecList
 import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.ViewModel
@@ -189,10 +190,11 @@ class MainViewModel(
     suspend fun setVideoConfig() {
         val resolution = videoResolutionLiveData.value ?: ApplicationConstants.DEFAULT_RESOLUTION
         val fps = videoFpsLiveData.value ?: ApplicationConstants.DEFAULT_FPS
+        val mimeType = getSupportedVideoMimeType(resolution, fps)
 
         streamer.setVideoConfig(
             VideoConfig(
-                mimeType = MediaFormat.MIMETYPE_VIDEO_HEVC,
+                mimeType = mimeType,
                 startBitrate = settingsRepository.videoBitrate,
                 resolution = resolution,
                 fps = fps,
@@ -204,6 +206,33 @@ class MainViewModel(
                 )
             }
         )
+    }
+
+    /**
+     * Queries available encoders at runtime to find if HEVC is fully supported for surface encoding.
+     * Some emulators do not support COLOR_FormatSurface with HEVC, so we fallback to AVC.
+     */
+    private fun getSupportedVideoMimeType(resolution: Size, fps: Int): String {
+        val hevcMime = MediaFormat.MIMETYPE_VIDEO_HEVC
+        val avcMime = MediaFormat.MIMETYPE_VIDEO_AVC
+        val formatSurface = MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface
+        val mcl = MediaCodecList(MediaCodecList.REGULAR_CODECS)
+        
+        for (info in mcl.codecInfos) {
+            if (!info.isEncoder) continue
+            try {
+                val caps = info.getCapabilitiesForType(hevcMime)
+                // Check if COLOR_FormatSurface is supported.
+                val supportsSurface = caps.colorFormats.contains(formatSurface)
+                val supportsResolution = caps.videoCapabilities?.isSizeSupported(resolution.width, resolution.height) == true
+                if (supportsSurface && supportsResolution) {
+                    return hevcMime
+                }
+            } catch (ignored: IllegalArgumentException) {
+                // Codec does not support HEVC
+            }
+        }
+        return avcMime
     }
 
     // ──────────────────────────────────────────────
