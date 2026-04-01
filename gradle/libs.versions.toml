@@ -1,4 +1,5 @@
 [versions]
+activityKtx = "1.9.3"
 agp = "9.1.0"
 appcompat = "1.7.1"
 constraintlayout = "2.2.1"
@@ -12,6 +13,7 @@ material = "1.13.0"
 streampack = "3.1.1"
 
 [libraries]
+activity-ktx = { module = "androidx.activity:activity-ktx", version.ref = "activityKtx" }
 appcompat = { module = "androidx.appcompat:appcompat", version.ref = "appcompat" }
 constraintlayout = { module = "androidx.constraintlayout:constraintlayout", version.ref = "constraintlayout" }
 core-ktx = { module = "androidx.core:core-ktx", version.ref = "coreKtx" }
@@ -27,5 +29,4 @@ streampack-srt = { group = "io.github.thibaultbee.streampack", name = "streampac
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
-kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 

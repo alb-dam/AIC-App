@@ -2,7 +2,6 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
     alias(libs.plugins.android.application)
-    alias(libs.plugins.kotlin.android)
 }
 
 android {
@@ -56,6 +55,7 @@ dependencies {
     implementation(libs.material)
     implementation(libs.constraintlayout)
     implementation(libs.lifecycle.runtime.ktx)
+    implementation(libs.activity.ktx)
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.ext.junit)
