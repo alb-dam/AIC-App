@@ -1,335 +1,202 @@
 package io.github.thibaultbee.streampack.app
 
-import android.Manifest
-import android.hardware.camera2.CameraMetadata
-import android.media.AudioFormat
-import android.media.MediaCodecInfo
-import android.media.MediaFormat
-import android.util.Log
-import android.util.Size
-import androidx.annotation.RequiresPermission
-import android.media.MediaCodecList
 import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.ViewModel
-import androidx.lifecycle.asLiveData
 import androidx.lifecycle.viewModelScope
 import io.github.thibaultbee.streampack.app.data.SettingsRepository
 import io.github.thibaultbee.streampack.app.data.rotation.RotationRepository
-import io.github.thibaultbee.streampack.core.elements.sources.audio.audiorecord.MicrophoneSourceFactory
-import io.github.thibaultbee.streampack.core.elements.sources.video.camera.ICameraSource
-import io.github.thibaultbee.streampack.core.interfaces.setCameraId
-import io.github.thibaultbee.streampack.core.interfaces.startStream
-import io.github.thibaultbee.streampack.core.streamers.single.AudioConfig
-import io.github.thibaultbee.streampack.core.streamers.single.SingleStreamer
-import io.github.thibaultbee.streampack.core.streamers.single.VideoConfig
+import io.github.thibaultbee.streampack.app.domain.IAudioProvider
+import io.github.thibaultbee.streampack.app.domain.ICameraProvider
+import io.github.thibaultbee.streampack.app.domain.IStreamEngine
+import io.github.thibaultbee.streampack.app.domain.IVideoEncoderEngine
 import io.github.thibaultbee.streampack.core.utils.extensions.isClosedException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.filterNotNull
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.isActive
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withTimeoutOrNull
-
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.merge
+import kotlinx.coroutines.flow.retryWhen
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+
+// To avoid Android SDK in ViewModel, we use a simple Pair for resolution
+data class Resolution(val width: Int, val height: Int)
 
 class MainViewModel(
     private val rotationRepository: RotationRepository,
     val settingsRepository: SettingsRepository,
-    val streamer: SingleStreamer,
-    val audioStreamer: SingleStreamer
+    private val streamEngine: IStreamEngine,
+    private val videoEncoder: IVideoEncoderEngine,
+    private val audioProvider: IAudioProvider,
+    private val cameraProvider: ICameraProvider
 ) : ViewModel() {
 
     companion object {
-        private const val TAG = "MainViewModel"
         private const val RETRY_DELAY_MS = 3000L
     }
 
     // ──────────────────────────────────────────────
-    //  Observable state
+    //  Observable state (MVI)
     // ──────────────────────────────────────────────
 
-    /** Streaming state (active / stopped). */
-    /** Streaming state (active / stopped) - combining both. */
-    private val _isStreamingLiveData = MutableLiveData(false)
-    val isStreamingLiveData: LiveData<Boolean> = _isStreamingLiveData
+    private val _uiState = MutableStateFlow<StreamState>(StreamState.Idle)
+    val uiState: StateFlow<StreamState> = _uiState.asStateFlow()
 
-    private var isVideoStreaming = false
-    private var isAudioStreaming = false
-
-    /** Connection attempt in progress. */
-    private val _isTryingConnectionLiveData = MutableLiveData(false)
-    val isTryingConnectionLiveData: LiveData<Boolean> = _isTryingConnectionLiveData
-
-    /** Retry in progress (waiting between attempts). */
-    private val _isRetryingLiveData = MutableLiveData(false)
-    val isRetryingLiveData: LiveData<Boolean> = _isRetryingLiveData
-
-    private var isVideoTrying = false
-    private var isAudioTrying = false
-    private var isVideoRetrying = false
-    private var isAudioRetrying = false
-
-    private fun updateTryingState() {
-        _isTryingConnectionLiveData.postValue(isVideoTrying || isAudioTrying)
-    }
-
-    private fun updateRetryingState() {
-        _isRetryingLiveData.postValue(isVideoRetrying || isAudioRetrying)
-    }
-
-    /** Active retry coroutines. */
-    private var videoRetryJob: Job? = null
-    private var audioRetryJob: Job? = null
-
-    /** Async disconnection errors. */
-    val closedThrowableLiveData: LiveData<Throwable> =
-        merge(streamer.throwableFlow, audioStreamer.throwableFlow)
-            .filterNotNull()
-            .filter { it.isClosedException }
-            .asLiveData()
-
-    /** Generic streamer errors. */
-    val throwableLiveData: LiveData<Throwable> =
-        merge(streamer.throwableFlow, audioStreamer.throwableFlow)
-            .filterNotNull()
-            .filter { !it.isClosedException }
-            .asLiveData()
+    private var streamJob: Job? = null
 
     /** Current video resolution. */
-    val videoResolutionLiveData = MutableLiveData(ApplicationConstants.DEFAULT_RESOLUTION)
+    val videoResolutionLiveData = MutableLiveData(Resolution(1920, 1080))
 
     /** Current FPS. */
-    val videoFpsLiveData = MutableLiveData(ApplicationConstants.DEFAULT_FPS)
+    val videoFpsLiveData = MutableLiveData(30)
 
     /** Focus state: -1 = auto, 0-100 = manual (0 near, 100 infinity). */
     val focusProgressLiveData = MutableLiveData(-1)
 
     // ──────────────────────────────────────────────
-    //  Init – device rotation
+    //  Init – observing device rotation and engine flow
     // ──────────────────────────────────────────────
 
     init {
+        // Sync engine streaming state to MVI Live state
         viewModelScope.launch {
-            streamer.isStreamingFlow.collect {
-                isVideoStreaming = it
-                _isStreamingLiveData.postValue(isVideoStreaming || isAudioStreaming)
+            combine(streamEngine.isVideoStreamingFlow, streamEngine.isAudioStreamingFlow) { video, audio ->
+                video to audio
+            }.collect { (video, audio) ->
+                _uiState.update { currentState ->
+                    // Only update to Live/Idle if we aren't in explicit connecting/retrying state 
+                    // that might briefly overlap, or if we transition to Live.
+                    if (video || audio) {
+                        StreamState.Live(video, audio)
+                    } else if (currentState is StreamState.Live) {
+                        StreamState.Idle
+                    } else {
+                        currentState
+                    }
+                }
             }
         }
+
+        // Handle async disconnects or generic errors
         viewModelScope.launch {
-            audioStreamer.isStreamingFlow.collect {
-                isAudioStreaming = it
-                _isStreamingLiveData.postValue(isVideoStreaming || isAudioStreaming)
-            }
+            merge(streamEngine.videoThrowableFlow, streamEngine.audioThrowableFlow)
+                .filterNotNull()
+                .collect { throwable ->
+                    if (throwable.isClosedException) {
+                        processIntent(StreamIntent.Disconnected(throwable))
+                    } else {
+                        // Generic error
+                        _uiState.update { StreamState.Error(throwable, recoverable = false) }
+                        processIntent(StreamIntent.Disconnected(throwable))
+                    }
+                }
         }
+
         viewModelScope.launch(Dispatchers.Default) {
             rotationRepository.rotationFlow.collect { rotation ->
-                streamer.setTargetRotation(rotation)
+                streamEngine.setTargetRotation(rotation)
             }
         }
     }
 
     // ──────────────────────────────────────────────
-    //  Streaming
+    //  Intent Processor
     // ──────────────────────────────────────────────
 
-    suspend fun startStream() = coroutineScope {
-        isVideoTrying = true
-        isAudioTrying = true
-        updateTryingState()
-        
-        val videoJob = launch {
-            try { streamer.startStream(settingsRepository.srtUrl) }
-            catch (e: Exception) { Log.e(TAG, "Video start failed", e) }
-        }
-        val audioJob = launch {
-            try { audioStreamer.startStream(settingsRepository.audioSrtUrl) }
-            catch (e: Exception) { Log.e(TAG, "Audio start failed", e) }
-        }
-        
-        videoJob.join()
-        audioJob.join()
-        
-        isVideoTrying = false
-        isAudioTrying = false
-        updateTryingState()
-    }
-
-    suspend fun stopStream() {
-        try { streamer.stopStream() } catch (e: Exception) { Log.e(TAG, "Error stopping main stream", e) }
-        try { audioStreamer.stopStream() } catch (e: Exception) { Log.e(TAG, "Error stopping audio stream", e) }
-    }
-
-    /**
-     * Starts retry loops that keep attempting to connect
-     * every [RETRY_DELAY_MS] until successful or cancelled.
-     */
-    fun startStreamWithRetry() {
-        startVideoStreamWithRetry()
-        startAudioStreamWithRetry()
-    }
-
-    private fun startVideoStreamWithRetry() {
-        videoRetryJob?.cancel()
-        videoRetryJob = viewModelScope.launch {
-            while (isActive) {
-                // Return if already streaming successfully
-                if (isVideoStreaming) {
-                    isVideoRetrying = false
-                    isVideoTrying = false
-                    updateTryingState()
-                    updateRetryingState()
-                    break
-                }
-
-                isVideoTrying = true
-                updateTryingState()
-                try {
-                    streamer.startStream(settingsRepository.srtUrl)
-                    // Connected successfully
-                    isVideoRetrying = false
-                    isVideoTrying = false
-                    updateTryingState()
-                    updateRetryingState()
-                    break
-                } catch (e: Exception) {
-                    Log.w(TAG, "Video connection failed, retrying in ${RETRY_DELAY_MS}ms…", e)
-                    isVideoTrying = false
-                    isVideoRetrying = true
-                    updateTryingState()
-                    updateRetryingState()
-                    delay(RETRY_DELAY_MS)
+    fun processIntent(intent: StreamIntent) {
+        when (intent) {
+            is StreamIntent.StartStream -> startStreamWithFlowRetry()
+            is StreamIntent.StopStream -> stopStreamAndReset()
+            is StreamIntent.RetryStream -> startStreamWithFlowRetry()
+            is StreamIntent.Disconnected -> {
+                println("Stream disconnected: ${intent.cause.message}. Retrying...")
+                startStreamWithFlowRetry()
+            }
+            is StreamIntent.ToggleCamera -> {
+                viewModelScope.launch {
+                    intent.cameraId?.let { setCameraId(it) }
                 }
             }
         }
     }
 
-    private fun startAudioStreamWithRetry() {
-        audioRetryJob?.cancel()
-        audioRetryJob = viewModelScope.launch {
-            while (isActive) {
-                // Return if already streaming successfully
-                if (isAudioStreaming) {
-                    isAudioRetrying = false
-                    isAudioTrying = false
-                    updateTryingState()
-                    updateRetryingState()
-                    break
-                }
+    // ──────────────────────────────────────────────
+    //  Streaming logic
+    // ──────────────────────────────────────────────
 
-                isAudioTrying = true
-                updateTryingState()
-                try {
-                    audioStreamer.startStream(settingsRepository.audioSrtUrl)
-                    // Connected successfully
-                    isAudioRetrying = false
-                    isAudioTrying = false
-                    updateTryingState()
-                    updateRetryingState()
-                    break
-                } catch (e: Exception) {
-                    Log.w(TAG, "Audio connection failed, retrying in ${RETRY_DELAY_MS}ms…", e)
-                    isAudioTrying = false
-                    isAudioRetrying = true
-                    updateTryingState()
-                    updateRetryingState()
-                    delay(RETRY_DELAY_MS)
-                }
+    private fun startStreamWithFlowRetry() {
+        streamJob?.cancel()
+        streamJob = viewModelScope.launch {
+            _uiState.update { StreamState.Connecting }
+            
+            // Video Flow with retry
+            val videoFlow = flow {
+                streamEngine.startVideoStream(settingsRepository.srtUrl)
+                emit(Unit)
+            }.retryWhen { cause, attempt ->
+                println("MainViewModel: Video connection failed, retrying in ${RETRY_DELAY_MS}ms…")
+                _uiState.update { StreamState.Retrying(attempt.toInt() + 1, RETRY_DELAY_MS, StreamSource.VIDEO) }
+                delay(RETRY_DELAY_MS)
+                true // always retry
             }
+
+            // Audio Flow with retry
+            val audioFlow = flow {
+                streamEngine.startAudioStream(settingsRepository.audioSrtUrl)
+                emit(Unit)
+            }.retryWhen { cause, attempt ->
+                println("MainViewModel: Audio connection failed, retrying in ${RETRY_DELAY_MS}ms…")
+                _uiState.update { StreamState.Retrying(attempt.toInt() + 1, RETRY_DELAY_MS, StreamSource.AUDIO) }
+                delay(RETRY_DELAY_MS)
+                true // always retry
+            }
+
+            // Launch both concurrently
+            launch { videoFlow.collect() }
+            launch { audioFlow.collect() }
         }
     }
 
-    /** Stops streaming and cancels any pending retry. */
-    fun stopStreamAndRetry() {
-        videoRetryJob?.cancel()
-        audioRetryJob?.cancel()
-        videoRetryJob = null
-        audioRetryJob = null
-        
-        isVideoRetrying = false
-        isAudioRetrying = false
-        updateRetryingState()
-        
-        isVideoTrying = false
-        isAudioTrying = false
-        updateTryingState()
+    private fun stopStreamAndReset() {
+        streamJob?.cancel()
+        streamJob = null
+        _uiState.update { StreamState.Idle }
 
         viewModelScope.launch {
-            stopStream()
+            try { streamEngine.stopVideoStream() } catch (e: Exception) { println("Error stopping video stream") }
+            try { streamEngine.stopAudioStream() } catch (e: Exception) { println("Error stopping audio stream") }
         }
     }
-
-    /** Called when the stream disconnects mid-session; re-enters the retry loop. */
-    fun onStreamDisconnected() {
-        startStreamWithRetry()
-    }
+    
+    // Kept for backward compatibility if MainActivity still calls it directly
+    fun startStreamWithRetry() = processIntent(StreamIntent.StartStream)
+    fun stopStreamAndRetry() = processIntent(StreamIntent.StopStream)
+    fun onStreamDisconnected() = processIntent(StreamIntent.RetryStream)
 
     // ──────────────────────────────────────────────
     //  Audio / Video Configuration
     // ──────────────────────────────────────────────
 
-    @RequiresPermission(Manifest.permission.RECORD_AUDIO)
     suspend fun setAudioConfig() {
-        val config = AudioConfig(
-            mimeType = MediaFormat.MIMETYPE_AUDIO_AAC,
-            sampleRate = ApplicationConstants.AUDIO_SAMPLE_RATE,
-            channelConfig = AudioFormat.CHANNEL_IN_STEREO
-        )
-        streamer.setAudioConfig(config)
-        audioStreamer.setAudioConfig(config)
+        audioProvider.configureAudio()
     }
 
     suspend fun setVideoConfig() {
-        val resolution = videoResolutionLiveData.value ?: ApplicationConstants.DEFAULT_RESOLUTION
-        val fps = videoFpsLiveData.value ?: ApplicationConstants.DEFAULT_FPS
-        val mimeType = getSupportedVideoMimeType(resolution, fps)
-
-        streamer.setVideoConfig(
-            VideoConfig(
-                mimeType = mimeType,
-                startBitrate = settingsRepository.videoBitrate,
-                resolution = resolution,
-                fps = fps,
-                gopDurationInS = ApplicationConstants.VIDEO_GOP_DURATION
-            ) { _ ->
-                setInteger(
-                    MediaFormat.KEY_BITRATE_MODE,
-                    MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR
-                )
-            }
-        )
-    }
-
-    /**
-     * Queries available encoders at runtime to find if HEVC is fully supported for surface encoding.
-     * Some emulators do not support COLOR_FormatSurface with HEVC, so we fallback to AVC.
-     */
-    private fun getSupportedVideoMimeType(resolution: Size, fps: Int): String {
-        val hevcMime = MediaFormat.MIMETYPE_VIDEO_HEVC
-        val avcMime = MediaFormat.MIMETYPE_VIDEO_AVC
-        val formatSurface = MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface
-        val mcl = MediaCodecList(MediaCodecList.REGULAR_CODECS)
+        val resolution = videoResolutionLiveData.value ?: Resolution(1920, 1080)
+        val fps = videoFpsLiveData.value ?: 30
         
-        for (info in mcl.codecInfos) {
-            if (!info.isEncoder) continue
-            try {
-                val caps = info.getCapabilitiesForType(hevcMime)
-                // Check if COLOR_FormatSurface is supported.
-                val supportsSurface = caps.colorFormats.contains(formatSurface)
-                val supportsResolution = caps.videoCapabilities?.isSizeSupported(resolution.width, resolution.height) == true
-                if (supportsSurface && supportsResolution) {
-                    return hevcMime
-                }
-            } catch (ignored: IllegalArgumentException) {
-                // Codec does not support HEVC
-            }
-        }
-        return avcMime
+        val mimeType = videoEncoder.getSupportedVideoMimeType(resolution.width, resolution.height, fps)
+        val startBitrate = settingsRepository.videoBitrate
+
+        videoEncoder.configureVideo(mimeType, startBitrate, resolution.width, resolution.height, fps)
     }
 
     // ──────────────────────────────────────────────
@@ -337,21 +204,19 @@ class MainViewModel(
     // ──────────────────────────────────────────────
 
     suspend fun setAudioSource() {
-        streamer.setAudioSource(MicrophoneSourceFactory())
-        audioStreamer.setAudioSource(MicrophoneSourceFactory())
+        audioProvider.setAudioSource()
     }
 
-    @RequiresPermission(Manifest.permission.CAMERA)
     suspend fun setCameraId(cameraId: String) {
-        streamer.setCameraId(cameraId)
+        cameraProvider.setCameraId(cameraId)
     }
 
     // ──────────────────────────────────────────────
-    //  User settings (resolution / fps)
+    //  User settings
     // ──────────────────────────────────────────────
 
-    fun setResolution(size: Size) {
-        videoResolutionLiveData.value = size
+    fun setResolution(width: Int, height: Int) {
+        videoResolutionLiveData.value = Resolution(width, height)
     }
 
     fun setFps(fps: Int) {
@@ -363,32 +228,16 @@ class MainViewModel(
     // ──────────────────────────────────────────────
 
     suspend fun setAutoFocus() {
-        val focus = cameraFocusOrNull() ?: return
-        when {
-            CameraMetadata.CONTROL_AF_MODE_CONTINUOUS_VIDEO in focus.availableAutoModes ->
-                focus.setAutoMode(CameraMetadata.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
-            CameraMetadata.CONTROL_AF_MODE_AUTO in focus.availableAutoModes ->
-                focus.setAutoMode(CameraMetadata.CONTROL_AF_MODE_AUTO)
+        val success = cameraProvider.setAutoFocus()
+        if (success) {
+            focusProgressLiveData.postValue(-1)
         }
-        focusProgressLiveData.postValue(-1)
     }
 
-    /**
-     * Sets a manual focus distance.
-     * @param progress 0.0 (nearest) → 1.0 (infinity)
-     */
     suspend fun setManualFocus(progress: Float) {
-        val focus = cameraFocusOrNull() ?: return
-        focus.setAutoMode(CameraMetadata.CONTROL_AF_MODE_OFF)
-        val range = focus.availableLensDistanceRange
-        focus.setLensDistance(range.upper * (1f - progress))
+        val success = cameraProvider.setManualFocus(progress)
+        if (success) {
+            // Keep the manual focus progress logic if needed
+        }
     }
-
-    // ──────────────────────────────────────────────
-    //  Private helpers
-    // ──────────────────────────────────────────────
-
-    /** Returns the focus controller of the current camera, or null. */
-    private fun cameraFocusOrNull() =
-        (streamer.videoInput?.sourceFlow?.value as? ICameraSource)?.settings?.focus
 }

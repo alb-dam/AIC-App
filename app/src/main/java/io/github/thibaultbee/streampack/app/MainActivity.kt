@@ -2,68 +2,69 @@ package io.github.thibaultbee.streampack.app
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.content.Context
 import android.content.pm.ActivityInfo
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CameraManager
+import android.media.AudioManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
-import android.content.Context
-import android.media.AudioManager
-import android.hardware.camera2.CameraManager
-import android.hardware.camera2.CameraCharacteristics
+import android.view.View
+import android.view.WindowManager
+import android.widget.SeekBar
 import androidx.activity.viewModels
 import androidx.annotation.RequiresPermission
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
-import androidx.lifecycle.lifecycleScope
-import io.github.thibaultbee.streampack.app.databinding.ActivityMainBinding
-import io.github.thibaultbee.streampack.core.elements.sources.video.camera.extensions.defaultCameraId
-import io.github.thibaultbee.streampack.core.streamers.lifecycle.StreamerActivityLifeCycleObserver
-import io.github.thibaultbee.streampack.app.utils.PermissionsManager
-import io.github.thibaultbee.streampack.app.utils.showDialog
-import io.github.thibaultbee.streampack.app.utils.toast
-import kotlinx.coroutines.launch
-import android.view.View
-import android.widget.SeekBar
-import android.view.WindowManager
-import androidx.core.view.WindowCompat
 import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.lifecycle.lifecycleScope
+import io.github.thibaultbee.streampack.app.databinding.ActivityMainBinding
+import io.github.thibaultbee.streampack.app.ui.OrientationManager
+import io.github.thibaultbee.streampack.app.ui.PermissionsHandler
+import io.github.thibaultbee.streampack.app.ui.PowerSavingManager
+import io.github.thibaultbee.streampack.app.utils.showDialog
+import io.github.thibaultbee.streampack.app.utils.toast
+import io.github.thibaultbee.streampack.core.elements.sources.video.camera.extensions.defaultCameraId
+import io.github.thibaultbee.streampack.core.streamers.lifecycle.StreamerActivityLifeCycleObserver
+import io.github.thibaultbee.streampack.core.streamers.single.SingleStreamer
+import kotlinx.coroutines.launch
 
 class MainActivity : AppCompatActivity() {
 
     companion object {
         private const val TAG = "MainActivity"
+        private const val LIVE_BUTTON_COOLDOWN_MS = 5000L
     }
+
+    // ── Core ──
 
     private lateinit var binding: ActivityMainBinding
-    private var originalBrightness: Float = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
-    private var wasRecActive = false
-    private var isFrontCamera = false
-    private val liveButtonCooldownMs = 5000L
+
+    private val streamer by lazy { SingleStreamer(applicationContext, withAudio = true, withVideo = true) }
+    private val audioStreamer by lazy { SingleStreamer(applicationContext, withAudio = true, withVideo = false) }
 
     private val viewModel: MainViewModel by viewModels {
-        MainViewModelFactory(this.application)
+        MainViewModelFactory(this.application, streamer, audioStreamer)
     }
 
-    private val streamerRequiredPermissions =
-        listOf(
-            Manifest.permission.CAMERA,
-            Manifest.permission.RECORD_AUDIO
-        )
+    // ── Extracted Components ──
 
     @SuppressLint("MissingPermission")
-    private val permissionsManager = PermissionsManager(
-        this,
-        streamerRequiredPermissions,
-        onAllGranted = { onPermissionsGranted() },
-        onShowPermissionRationale = { permissions, onRequiredPermissionLastTime ->
+    private val permissionsHandler = PermissionsHandler(
+        activity = this,
+        permissions = listOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO),
+        onGranted = { onPermissionsGranted() },
+        onRationale = { permissions, retry ->
             showDialog(
                 title = getString(R.string.permissions_denied_title),
                 message = getString(R.string.permissions_rationale, permissions),
                 positiveButtonText = R.string.accept,
-                onPositiveButtonClick = { onRequiredPermissionLastTime() },
+                onPositiveButtonClick = { retry() },
                 negativeButtonText = R.string.denied
             )
         },
@@ -74,68 +75,45 @@ class MainActivity : AppCompatActivity() {
                 positiveButtonText = 0,
                 negativeButtonText = 0
             )
-        })
+        }
+    )
+
+    private val orientationManager by lazy {
+        OrientationManager(
+            context = this,
+            viewsProvider = {
+                listOf(
+                    binding.settingsTopButton,
+                    binding.settingsPanel,
+                    binding.focusTopButton,
+                    binding.focusPanel,
+                    binding.liveButton
+                )
+            }
+        )
+    }
+
+    private val powerSavingManager by lazy {
+        PowerSavingManager(
+            activity = this,
+            overlayProvider = { binding.energySavingOverlay },
+            energyButtonProvider = { binding.energySavingButton },
+            onPowerSavingEnabled = { toast(getString(R.string.energy_saving_message)) }
+        )
+    }
 
     private val streamerLifeCycleObserver by lazy {
-        StreamerActivityLifeCycleObserver(viewModel.streamer)
+        StreamerActivityLifeCycleObserver(streamer)
     }
 
     private val audioStreamerLifeCycleObserver by lazy {
-        StreamerActivityLifeCycleObserver(viewModel.audioStreamer)
+        StreamerActivityLifeCycleObserver(audioStreamer)
     }
 
-    // ── UI Rotation ──
+    // ── State ──
 
-    private object RotationConstants {
-        val RANGE_270 = 45..134
-        val RANGE_180 = 135..224
-        val RANGE_90 = 225..314
-    }
-
-    private var currentUiRotation = 0f
-
-    private val orientationEventListener by lazy {
-        object : android.view.OrientationEventListener(this) {
-            override fun onOrientationChanged(orientation: Int) {
-                if (orientation == ORIENTATION_UNKNOWN) return
-
-                val baseTarget = when (orientation) {
-                    in RotationConstants.RANGE_270  -> 270f
-                    in RotationConstants.RANGE_180 -> 180f
-                    in RotationConstants.RANGE_90 -> 90f
-                    else        -> 0f
-                }
-
-                var diff = baseTarget - (currentUiRotation % 360f)
-                while (diff <= -180f) diff += 360f
-                while (diff > 180f) diff -= 360f
-
-                if (diff != 0f) {
-                    currentUiRotation += diff
-                    val viewsToRotate = listOf(
-                        binding.settingsTopButton,
-                        binding.settingsPanel,
-                        binding.focusTopButton,
-                        binding.focusPanel,
-                        binding.liveButton
-                    )
-                    viewsToRotate.forEach { view ->
-                        view.animate().rotation(currentUiRotation).setDuration(300).start()
-                    }
-                }
-            }
-        }
-    }
-
-    // ── Auto Energy Saving ──
-
-    private val inactivityTimeoutMs = 30000L
-    private val inactivityHandler = Handler(Looper.getMainLooper())
-    private val energySavingRunnable = Runnable {
-        if (isRecActive() && binding.energySavingOverlay.visibility == View.GONE) {
-            enablePowerSavingMode()
-        }
-    }
+    private var wasRecActive = false
+    private var isFrontCamera = false
 
     // ──────────────────────────────────────────────
     //  Lifecycle
@@ -159,74 +137,70 @@ class MainActivity : AppCompatActivity() {
         windowInsetsController.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         windowInsetsController.hide(WindowInsetsCompat.Type.systemBars())
 
-        bindProperties()
+        // Register lifecycle observers
+        lifecycle.addObserver(orientationManager)
+        lifecycle.addObserver(streamerLifeCycleObserver)
+        lifecycle.addObserver(audioStreamerLifeCycleObserver)
+
+        bindObservers()
+        bindControls()
+        configureStreamer()
     }
 
     override fun onStart() {
         super.onStart()
-        orientationEventListener.enable()
-        permissionsManager.requestPermissions()
-    }
-
-    override fun onStop() {
-        super.onStop()
-        orientationEventListener.disable()
+        permissionsHandler.request()
     }
 
     override fun onDestroy() {
         super.onDestroy()
         lifecycle.removeObserver(streamerLifeCycleObserver)
         lifecycle.removeObserver(audioStreamerLifeCycleObserver)
+        lifecycle.removeObserver(orientationManager)
     }
 
     override fun onUserInteraction() {
         super.onUserInteraction()
-        if (isRecActive() && binding.energySavingOverlay.visibility == View.GONE) {
-            startInactivityTimer()
+        if (isRecActive(viewModel.uiState.value) && !powerSavingManager.isPowerSavingActive) {
+            powerSavingManager.startInactivityTimer()
         }
     }
 
     // ──────────────────────────────────────────────
-    //  Binding & Observers
+    //  ViewModel Observation
     // ──────────────────────────────────────────────
 
-    private fun bindProperties() {
-        // Live button toggle (with auto-retry)
+    private fun bindObservers() {
+        lifecycleScope.launch {
+            viewModel.uiState.collect { state ->
+                handleStreamState(state)
+            }
+        }
+
+        viewModel.focusProgressLiveData.observe(this) { progress ->
+            binding.focusTopButton.text = if (progress == null || progress < 0) "AF" else "MF"
+        }
+
+        observeResolutionAndFps()
+    }
+
+    // ──────────────────────────────────────────────
+    //  UI Controls Setup
+    // ──────────────────────────────────────────────
+
+    private fun bindControls() {
+        // Live button
         binding.liveButton.setOnCheckedChangeListener { view, isChecked ->
             if (view.isPressed) {
-                if (isChecked) {
-                    viewModel.startStreamWithRetry()
-                } else {
-                    viewModel.stopStreamAndRetry()
-                }
-                // Cooldown: disable button for 4 seconds to let SRT listener reopen
+                if (isChecked) viewModel.processIntent(StreamIntent.StartStream) else viewModel.processIntent(StreamIntent.StopStream)
                 view.isEnabled = false
                 view.alpha = 0.5f
                 Handler(Looper.getMainLooper()).postDelayed({
                     view.isEnabled = true
                     view.alpha = 1.0f
-                }, liveButtonCooldownMs)
+                }, LIVE_BUTTON_COOLDOWN_MS)
             }
         }
-
-        lifecycle.addObserver(streamerLifeCycleObserver)
-        lifecycle.addObserver(audioStreamerLifeCycleObserver)
-        configureStreamer()
-
-        // Error observers
-        viewModel.closedThrowableLiveData.observe(this) {
-            toast(getString(R.string.error_connection, it.message))
-            viewModel.onStreamDisconnected()
-        }
-        viewModel.throwableLiveData.observe(this) {
-            toast(getString(R.string.error_generic, it.message))
-            viewModel.onStreamDisconnected()
-        }
-
-        // Streaming / retry state → unified UI updates
-        viewModel.isStreamingLiveData.observe(this) { updateRecState() }
-        viewModel.isTryingConnectionLiveData.observe(this) { updateRecState() }
-        viewModel.isRetryingLiveData.observe(this) { updateRecState() }
 
         // Settings panel toggle
         binding.settingsTopButton.setOnClickListener {
@@ -250,12 +224,63 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        setupFocusControls()
-        setupResolutionAndFpsControls()
-        setupEnergySaving()
+        setupFocusSeekBar()
         setupCameraSwitch()
         setupMute()
+
+        // Energy saving (delegated to PowerSavingManager)
+        binding.energySavingButton.setOnClickListener { powerSavingManager.enablePowerSaving() }
+        binding.energySavingOverlay.setOnClickListener { powerSavingManager.disablePowerSaving() }
     }
+
+    // ──────────────────────────────────────────────
+    //  Streaming State → UI
+    // ──────────────────────────────────────────────
+
+    private fun isRecActive(state: StreamState): Boolean = state !is StreamState.Idle && state !is StreamState.Error
+
+    private fun handleStreamState(state: StreamState) {
+        val recActive = isRecActive(state)
+        val isStreaming = state is StreamState.Live
+
+        if (recActive) {
+            powerSavingManager.setKeepScreenOn(true)
+            powerSavingManager.setEnergyButtonVisible(true)
+            if (isStreaming) requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LOCKED
+            if (!wasRecActive) powerSavingManager.startInactivityTimer()
+        } else {
+            requestedOrientation = ApplicationConstants.supportedOrientation
+            powerSavingManager.onRecordingStop()
+        }
+
+        wasRecActive = recActive
+        updateLiveButtonState(recActive)
+        updateStatusDot(state)
+
+        if (state is StreamState.Error) {
+            toast(getString(R.string.error_generic, state.cause?.message ?: ""))
+        }
+    }
+
+    private fun updateLiveButtonState(recActive: Boolean) {
+        binding.liveButton.isChecked = recActive
+    }
+
+    private fun updateStatusDot(state: StreamState) {
+        val color = when (state) {
+            is StreamState.Live -> 0xFF4CAF50.toInt()
+            is StreamState.Connecting, is StreamState.Retrying -> 0xFFFFC107.toInt()
+            else -> 0xFFFF4444.toInt()
+        }
+        val bg = binding.streamStatusDot.background
+        if (bg is android.graphics.drawable.GradientDrawable) {
+            bg.setColor(color)
+        }
+    }
+
+    // ──────────────────────────────────────────────
+    //  Settings
+    // ──────────────────────────────────────────────
 
     private fun loadSettings() {
         binding.ipInput.setText(viewModel.settingsRepository.srtIp)
@@ -269,17 +294,96 @@ class MainActivity : AppCompatActivity() {
     private fun saveSettings() {
         val ip = binding.ipInput.text.toString()
         if (ip.isNotBlank()) viewModel.settingsRepository.srtIp = ip
-
-        val srtPort = binding.srtPortInput.text.toString().toIntOrNull()
-        if (srtPort != null) viewModel.settingsRepository.srtPort = srtPort
-
-        val audioSrtPort = binding.audioSrtPortInput.text.toString().toIntOrNull()
-        if (audioSrtPort != null) viewModel.settingsRepository.audioSrtPort = audioSrtPort
-
-        val mbps = binding.bitrateInput.text.toString().toFloatOrNull()
-        if (mbps != null && mbps > 0) {
-            viewModel.settingsRepository.videoBitrate = (mbps * 1_000_000).toInt()
+        binding.srtPortInput.text.toString().toIntOrNull()?.let { viewModel.settingsRepository.srtPort = it }
+        binding.audioSrtPortInput.text.toString().toIntOrNull()?.let { viewModel.settingsRepository.audioSrtPort = it }
+        binding.bitrateInput.text.toString().toFloatOrNull()?.takeIf { it > 0 }?.let {
+            viewModel.settingsRepository.videoBitrate = (it * 1_000_000).toInt()
         }
+    }
+
+    // ──────────────────────────────────────────────
+    //  Resolution & FPS
+    // ──────────────────────────────────────────────
+
+    private fun observeResolutionAndFps() {
+        val accentColor = ContextCompat.getColor(this, R.color.accent)
+        val whiteColor = ContextCompat.getColor(this, R.color.white)
+
+        val resolutionButtons = mapOf(
+            binding.res8k  to ResolutionOption.RES_8K,
+            binding.resUhd to ResolutionOption.RES_UHD,
+            binding.resFhd to ResolutionOption.RES_FHD,
+            binding.resHd  to ResolutionOption.RES_HD
+        )
+        val fpsButtons = mapOf(binding.fps60 to 60, binding.fps30 to 30)
+
+        viewModel.videoResolutionLiveData.observe(this) { size ->
+            resolutionButtons.forEach { (button, option) ->
+                button.setTextColor(if (size.width == option.size.width && size.height == option.size.height) accentColor else whiteColor)
+            }
+            updateSettingsButtonLabel()
+        }
+        viewModel.videoFpsLiveData.observe(this) { fps ->
+            fpsButtons.forEach { (button, value) ->
+                button.setTextColor(if (fps == value) accentColor else whiteColor)
+            }
+            updateSettingsButtonLabel()
+        }
+
+        resolutionButtons.forEach { (button, option) ->
+            button.setOnClickListener {
+                if (viewModel.uiState.value is StreamState.Live) {
+                    toast(getString(R.string.error_stop_stream_resolution))
+                } else {
+                    viewModel.setResolution(option.size.width, option.size.height)
+                    configureStreamer()
+                }
+            }
+        }
+        fpsButtons.forEach { (button, value) ->
+            button.setOnClickListener {
+                if (viewModel.uiState.value is StreamState.Live) {
+                    toast(getString(R.string.error_stop_stream_fps))
+                } else {
+                    viewModel.setFps(value)
+                    configureStreamer()
+                }
+            }
+        }
+    }
+
+    private fun updateSettingsButtonLabel() {
+        val size = viewModel.videoResolutionLiveData.value ?: Resolution(1920, 1080)
+        val fps = viewModel.videoFpsLiveData.value ?: ApplicationConstants.DEFAULT_FPS
+        val resLabel = ResolutionOption.labelForSize(android.util.Size(size.width, size.height))
+        binding.settingsTopButton.text = "$resLabel\n$fps"
+    }
+
+    // ──────────────────────────────────────────────
+    //  Focus / Camera / Mute
+    // ──────────────────────────────────────────────
+
+    private fun setupFocusSeekBar() {
+        binding.focusSeekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
+                if (!fromUser) return
+                if (progress == 0) {
+                    binding.focusModeLabel.text = getString(R.string.focus_auto)
+                    lifecycleScope.launch {
+                        try { viewModel.setAutoFocus() }
+                        catch (e: Exception) { Log.w(TAG, "Failed to set auto focus", e); toast(getString(R.string.error_focus)) }
+                    }
+                } else {
+                    binding.focusModeLabel.text = if (progress == 100) getString(R.string.focus_infinity) else "$progress%"
+                    lifecycleScope.launch {
+                        try { viewModel.setManualFocus(progress / 100f) }
+                        catch (e: Exception) { Log.w(TAG, "Failed to set manual focus", e); toast(getString(R.string.error_focus)) }
+                    }
+                }
+            }
+            override fun onStartTrackingTouch(seekBar: SeekBar) {}
+            override fun onStopTrackingTouch(seekBar: SeekBar) {}
+        })
     }
 
     private fun setupCameraSwitch() {
@@ -289,25 +393,14 @@ class MainActivity : AppCompatActivity() {
                 try {
                     val cameraManager = getSystemService(Context.CAMERA_SERVICE) as CameraManager
                     val targetFacing = if (isFrontCamera) CameraCharacteristics.LENS_FACING_FRONT else CameraCharacteristics.LENS_FACING_BACK
-                    
                     var targetCameraId: String? = null
                     for (id in cameraManager.cameraIdList) {
                         val chars = cameraManager.getCameraCharacteristics(id)
-                        if (chars.get(CameraCharacteristics.LENS_FACING) == targetFacing) {
-                            targetCameraId = id
-                            break
-                        }
+                        if (chars.get(CameraCharacteristics.LENS_FACING) == targetFacing) { targetCameraId = id; break }
                     }
-                    
-                    if (targetCameraId == null) {
-                        targetCameraId = this@MainActivity.defaultCameraId
-                        isFrontCamera = false
-                    }
-                    
+                    if (targetCameraId == null) { targetCameraId = this@MainActivity.defaultCameraId; isFrontCamera = false }
                     viewModel.setCameraId(targetCameraId)
-                } catch (e: Exception) {
-                    Log.e(TAG, "Error switching camera", e)
-                }
+                } catch (e: Exception) { Log.e(TAG, "Error switching camera", e) }
             }
         }
     }
@@ -320,254 +413,17 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ──────────────────────────────────────────────
-    //  Live button state (deduplicated)
-    // ──────────────────────────────────────────────
-
-    private fun updateLiveButtonState() {
-        val isStreaming = viewModel.isStreamingLiveData.value == true
-        val isTrying = viewModel.isTryingConnectionLiveData.value == true
-        val isRetrying = viewModel.isRetryingLiveData.value == true
-        binding.liveButton.isChecked = isStreaming || isTrying || isRetrying
-    }
-
-    /** True when the REC button is logically "on" (streaming, connecting, or retrying). */
-    private fun isRecActive(): Boolean {
-        return viewModel.isStreamingLiveData.value == true
-                || viewModel.isTryingConnectionLiveData.value == true
-                || viewModel.isRetryingLiveData.value == true
-    }
-
-    /**
-     * Central method called by all state observers.
-     * Manages wake lock, screen dimming, orientation, and status dot.
-     */
-    private fun updateRecState() {
-        val recActive = isRecActive()
-        val isStreaming = viewModel.isStreamingLiveData.value == true
-
-        if (recActive) {
-            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-            binding.energySavingButton.visibility = View.VISIBLE
-            if (isStreaming) lockOrientation()
-            // Only start the timer on the transition from inactive → active
-            if (!wasRecActive) {
-                startInactivityTimer()
-            }
-        } else {
-            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-            binding.energySavingButton.visibility = View.GONE
-            unlockOrientation()
-            disablePowerSavingMode()
-            stopInactivityTimer()
-        }
-
-        wasRecActive = recActive
-        updateLiveButtonState()
-        updateStatusDot()
-    }
-
-    private fun updateStatusDot() {
-        val isStreaming = viewModel.isStreamingLiveData.value == true
-        val color = when {
-            isStreaming -> 0xFF4CAF50.toInt()  // Green – connected
-            isRecActive() -> 0xFFFFC107.toInt()  // Yellow – trying/retrying
-            else -> 0xFFFF4444.toInt()  // Red – idle
-        }
-        val bg = binding.streamStatusDot.background
-        if (bg is android.graphics.drawable.GradientDrawable) {
-            bg.setColor(color)
-        }
-    }
-
-    // ──────────────────────────────────────────────
-    //  Focus controls
-    // ──────────────────────────────────────────────
-
-    private fun setupFocusControls() {
-        binding.focusSeekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
-                if (!fromUser) return
-                if (progress == 0) {
-                    binding.focusModeLabel.text = getString(R.string.focus_auto)
-                    lifecycleScope.launch {
-                        try {
-                            viewModel.setAutoFocus()
-                        } catch (e: Exception) {
-                            Log.w(TAG, "Failed to set auto focus", e)
-                            toast(getString(R.string.error_focus))
-                        }
-                    }
-                } else {
-                    binding.focusModeLabel.text = if (progress == 100) getString(R.string.focus_infinity) else "$progress%"
-                    lifecycleScope.launch {
-                        try {
-                            viewModel.setManualFocus(progress / 100f)
-                        } catch (e: Exception) {
-                            Log.w(TAG, "Failed to set manual focus", e)
-                            toast(getString(R.string.error_focus))
-                        }
-                    }
-                }
-            }
-            override fun onStartTrackingTouch(seekBar: SeekBar) {}
-            override fun onStopTrackingTouch(seekBar: SeekBar) {}
-        })
-
-        viewModel.focusProgressLiveData.observe(this) { progress ->
-            binding.focusTopButton.text = if (progress == null || progress < 0) "AF" else "MF"
-        }
-    }
-
-    // ──────────────────────────────────────────────
-    //  Resolution & FPS controls
-    // ──────────────────────────────────────────────
-
-    private fun setupResolutionAndFpsControls() {
-        val accentColor = ContextCompat.getColor(this, R.color.accent)
-        val whiteColor = ContextCompat.getColor(this, R.color.white)
-
-        // Map each button to its ResolutionOption
-        val resolutionButtons = mapOf(
-            binding.res8k  to ResolutionOption.RES_8K,
-            binding.resUhd to ResolutionOption.RES_UHD,
-            binding.resFhd to ResolutionOption.RES_FHD,
-            binding.resHd  to ResolutionOption.RES_HD
-        )
-
-        val fpsButtons = mapOf(
-            binding.fps60 to 60,
-            binding.fps30 to 30
-        )
-
-        // Observe resolution → highlight + update header
-        viewModel.videoResolutionLiveData.observe(this) { size ->
-            resolutionButtons.forEach { (button, option) ->
-                button.setTextColor(if (size == option.size) accentColor else whiteColor)
-            }
-            updateSettingsButtonLabel()
-        }
-
-        // Observe FPS → highlight + update header
-        viewModel.videoFpsLiveData.observe(this) { fps ->
-            fpsButtons.forEach { (button, value) ->
-                button.setTextColor(if (fps == value) accentColor else whiteColor)
-            }
-            updateSettingsButtonLabel()
-        }
-
-        // Resolution click listeners
-        resolutionButtons.forEach { (button, option) ->
-            button.setOnClickListener {
-                if (viewModel.isStreamingLiveData.value == true) {
-                    toast(getString(R.string.error_stop_stream_resolution))
-                } else {
-                    viewModel.setResolution(option.size)
-                    configureStreamer()
-                }
-            }
-        }
-
-        // FPS click listeners
-        fpsButtons.forEach { (button, value) ->
-            button.setOnClickListener {
-                if (viewModel.isStreamingLiveData.value == true) {
-                    toast(getString(R.string.error_stop_stream_fps))
-                } else {
-                    viewModel.setFps(value)
-                    configureStreamer()
-                }
-            }
-        }
-    }
-
-    private fun updateSettingsButtonLabel() {
-        val size = viewModel.videoResolutionLiveData.value ?: ApplicationConstants.DEFAULT_RESOLUTION
-        val fps = viewModel.videoFpsLiveData.value ?: ApplicationConstants.DEFAULT_FPS
-        val resLabel = ResolutionOption.labelForSize(size)
-        binding.settingsTopButton.text = "$resLabel\n$fps"
-    }
-
-    // ──────────────────────────────────────────────
-    //  Energy saving
-    // ──────────────────────────────────────────────
-
-    private fun setupEnergySaving() {
-        binding.energySavingButton.setOnClickListener {
-            enablePowerSavingMode()
-        }
-        binding.energySavingOverlay.setOnClickListener {
-            disablePowerSavingMode()
-        }
-    }
-
-    private fun enablePowerSavingMode() {
-        originalBrightness = window.attributes.screenBrightness
-
-        val layoutParams = window.attributes
-        layoutParams.screenBrightness = 0.01f
-        window.attributes = layoutParams
-
-        binding.energySavingOverlay.visibility = View.VISIBLE
-        stopInactivityTimer()
-
-        toast(getString(R.string.energy_saving_message))
-    }
-
-    private fun disablePowerSavingMode() {
-        if (binding.energySavingOverlay.visibility == View.VISIBLE) {
-            val layoutParams = window.attributes
-            layoutParams.screenBrightness = originalBrightness
-            window.attributes = layoutParams
-
-            binding.energySavingOverlay.visibility = View.GONE
-            startInactivityTimer()
-        }
-    }
-
-    private fun startInactivityTimer() {
-        inactivityHandler.removeCallbacks(energySavingRunnable)
-        if (isRecActive()) {
-            inactivityHandler.postDelayed(energySavingRunnable, inactivityTimeoutMs)
-        }
-    }
-
-    private fun stopInactivityTimer() {
-        inactivityHandler.removeCallbacks(energySavingRunnable)
-    }
-
-    // ──────────────────────────────────────────────
-    //  Orientation lock
-    // ──────────────────────────────────────────────
-
-    private fun lockOrientation() {
-        requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LOCKED
-    }
-
-    private fun unlockOrientation() {
-        requestedOrientation = ApplicationConstants.supportedOrientation
-    }
-
-    // ──────────────────────────────────────────────
-    //  Permissions & Streamer setup
+    //  Permissions & Streamer Setup
     // ──────────────────────────────────────────────
 
     @RequiresPermission(allOf = [Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO])
     private fun onPermissionsGranted() {
-        setAVSource()
-        setStreamerView()
-    }
-
-    @RequiresPermission(allOf = [Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO])
-    private fun setAVSource() {
         lifecycleScope.launch {
             viewModel.setAudioSource()
             viewModel.setCameraId(this@MainActivity.defaultCameraId)
         }
-    }
-
-    private fun setStreamerView() {
         lifecycleScope.launch {
-            binding.preview.setVideoSourceProvider(viewModel.streamer)
+            binding.preview.setVideoSourceProvider(streamer)
         }
     }
 
@@ -579,8 +435,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ──────────────────────────────────────────────
-    //  Helpers
     // ──────────────────────────────────────────────
 
     private fun toast(message: String) {
